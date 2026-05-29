@@ -337,7 +337,7 @@ jobs:
 
           appimage_source="$(find src-tauri/target/release/bundle/appimage -type f -name '*.AppImage' | sort | head -n 1)"
           if [ -n "$appimage_source" ]; then
-            cp "$appimage_source" "release-assets/floral-notepaper_${ver}_x86_64.AppImage"
+            cp "$appimage_source" "release-assets/floral-notepaper_${ver}_amd64.AppImage"
           fi
 
           shopt -s nullglob

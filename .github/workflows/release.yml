@@ -35,7 +35,7 @@ jobs:
 
           macOS Apple Silicon 版：\`floral-notepaper_${ver}_aarch64.dmg\`；macOS Intel 版：\`floral-notepaper_${ver}_x64.dmg\`。
 
-          Linux 版：\`floral-notepaper_${ver}_amd64.deb\`（Debian/Ubuntu）、\`floral-notepaper-${ver}-1.x86_64.rpm\`（Fedora/RHEL）、\`floral-notepaper_${ver}_x86_64.AppImage\`（通用 Linux）。
+          Linux 版：\`floral-notepaper_${ver}_amd64.deb\`（Debian/Ubuntu）、\`floral-notepaper-${ver}-1.x86_64.rpm\`（Fedora/RHEL）、\`floral-notepaper_${ver}_amd64.AppImage\`（通用 Linux）。
 
           macOS 版安装流程请参考视频（Bilibili）：[Mac云课堂 - 在 Mac 上装软件，要学会和苹果斗智斗勇](https://www.bilibili.com/video/BV1tg411t7hN)
           EOF
