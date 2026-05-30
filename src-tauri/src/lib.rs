@@ -1,6 +1,7 @@
 pub mod desktop;
 pub mod locales;
 pub mod services;
+pub mod updater;
 
 use locales::Locale;
 use services::notes::{default_store, AppConfig, AppError, Note, NoteMetadata, SaveNoteRequest};
@@ -319,6 +320,12 @@ pub fn run() {
                 let _ = scope.allow_directory(base.join("images"), true);
                 let _ = scope.allow_directory(base.join("backgrounds"), true);
             }
+            let updater_state = updater::UpdaterState::new(app.package_info().version.to_string());
+            if let Err(error) = updater_state.initialize() {
+                eprintln!("failed to initialize updater infrastructure: {error}");
+            }
+            app.manage(updater_state);
+            updater::start_auto_check_scheduler(app.handle().clone());
             desktop::setup_desktop(app)?;
             Ok(())
         })
@@ -354,6 +361,16 @@ pub fn run() {
             open_tile_window,
             toggle_tile_window,
             open_note_in_editor,
+            updater::commands::update_status,
+            updater::commands::update_settings_get,
+            updater::commands::update_settings_save,
+            updater::commands::update_mirror_cdk_set,
+            updater::commands::update_mirror_cdk_clear,
+            updater::commands::update_check,
+            updater::commands::update_download,
+            updater::commands::update_install,
+            updater::commands::update_install_prepare_report,
+            updater::commands::update_cancel,
             take_startup_file
         ])
         .run(tauri::generate_context!())
