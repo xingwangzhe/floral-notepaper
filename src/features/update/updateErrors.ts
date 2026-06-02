@@ -1,3 +1,7 @@
+/**
+ * ja locale for settings.update.error.* is not yet translated.
+ * Japanese users will see the zh-CN fallback text from the defaultValue until ja translations are added.
+ */
 import { t, type TFunction } from "i18next";
 
 interface SerializedUpdateError {

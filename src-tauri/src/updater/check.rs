@@ -57,6 +57,15 @@ struct UpdateCandidate {
     github_asset_url: Option<String>,
     can_download_from_mirror: bool,
     can_download_from_github: bool,
+    /// Whether SHA-256 hash verification is enabled for this candidate.
+    /// Set to `false` for Mirror source because the Mirror API does not
+    /// return asset checksums in its response.
+    ///
+    /// This field is consumed at the candidate-construction site for clarity
+    /// and logging; the actual enforcement happens in `DownloadPlan`, which
+    /// derives the flag from the download source at plan-resolution time.
+    #[allow(dead_code)]
+    sha256_verification_enabled: bool,
 }
 
 impl UpdateCandidate {
@@ -472,19 +481,18 @@ fn mirror_request_error_message(error: &reqwest::Error) -> String {
     "请求失败".into()
 }
 
-fn check_mirror_api(
-    context: &UpdateCheckContext,
-    priority: usize,
+/// Common Mirror API call: URL construction, HTTP request, JSON parsing,
+/// and Mirror error-code handling.  Returns [`MirrorApiData`] on success.
+fn call_mirror_api(
+    current_version: &str,
+    os: &str,
+    arch: &str,
     cdk: Option<&str>,
-) -> Result<ProviderCheck, AppError> {
-    let os = mirror_os_param(&context.platform.os);
-    let arch = mirror_arch_param(&context.platform.arch);
-    let current_version = format!("v{}", context.current_version_text());
-
+) -> Result<MirrorApiData, AppError> {
     let mut url = reqwest::Url::parse(&format!("{MIRROR_API_BASE}/{MIRROR_RES_ID}/latest"))
         .map_err(|e| errors::mirror_api_error(format!("URL 构建失败：{e}")))?;
     url.query_pairs_mut()
-        .append_pair("current_version", &current_version)
+        .append_pair("current_version", current_version)
         .append_pair("os", os)
         .append_pair("arch", arch)
         .append_pair("user_agent", MIRROR_USER_AGENT);
@@ -527,9 +535,21 @@ fn check_mirror_api(
         });
     }
 
-    let data = api_response
+    api_response
         .data
-        .ok_or_else(|| errors::mirror_api_error("响应缺少 data 字段"))?;
+        .ok_or_else(|| errors::mirror_api_error("响应缺少 data 字段"))
+}
+
+fn check_mirror_api(
+    context: &UpdateCheckContext,
+    priority: usize,
+    cdk: Option<&str>,
+) -> Result<ProviderCheck, AppError> {
+    let os = mirror_os_param(&context.platform.os);
+    let arch = mirror_arch_param(&context.platform.arch);
+    let current_version = format!("v{}", context.current_version_text());
+
+    let data = call_mirror_api(&current_version, os, arch, cdk)?;
 
     let version_str = data
         .version_name
@@ -547,6 +567,12 @@ fn check_mirror_api(
 
     let mirror_asset_url = data.url;
     let has_url = mirror_asset_url.is_some();
+    // Mirror API does not provide asset SHA-256 checksums in its response,
+    // so hash verification is explicitly disabled for Mirror-sourced downloads.
+    eprintln!(
+        "[update] Mirror API response does not include SHA-256 checksum; \
+         verification disabled for Mirror source downloads"
+    );
     Ok(ProviderCheck::Available(Box::new(UpdateCandidate {
         priority,
         version: version_str.to_string(),
@@ -561,6 +587,7 @@ fn check_mirror_api(
         github_asset_url: None,
         can_download_from_mirror: has_url,
         can_download_from_github: false,
+        sha256_verification_enabled: false,
     })))
 }
 
@@ -576,56 +603,9 @@ pub(crate) fn fetch_mirror_download_url(
 ) -> Result<MirrorDownloadInfo, AppError> {
     let os = mirror_os_param(&platform.os);
     let arch = mirror_arch_param(&platform.arch);
+    let version = format!("v{current_version}");
 
-    let mut url = reqwest::Url::parse(&format!("{MIRROR_API_BASE}/{MIRROR_RES_ID}/latest"))
-        .map_err(|e| errors::mirror_api_error(format!("URL 构建失败：{e}")))?;
-    url.query_pairs_mut()
-        .append_pair("current_version", &format!("v{current_version}"))
-        .append_pair("os", os)
-        .append_pair("arch", arch)
-        .append_pair("user_agent", MIRROR_USER_AGENT);
-    if let Some(cdk) = cdk.filter(|s| !s.trim().is_empty()) {
-        url.query_pairs_mut().append_pair("cdk", cdk);
-    }
-
-    let client = build_mirror_api_client()?;
-    let response = client.get(url).send().map_err(mirror_request_error)?;
-
-    let status = response.status();
-    if !status.is_success() && status.as_u16() != 403 {
-        return Err(errors::mirror_api_error(format!(
-            "HTTP {}",
-            status.as_u16()
-        )));
-    }
-
-    let body = response.text().map_err(|error| {
-        errors::mirror_api_error(format!(
-            "响应读取失败：{}",
-            mirror_request_error_message(&error)
-        ))
-    })?;
-    let api_response: MirrorApiResponse = serde_json::from_str(&body)
-        .map_err(|error| errors::mirror_api_error(format!("响应解析失败：{error}")))?;
-
-    if api_response.code < 0 {
-        return Err(errors::mirror_api_error(format!(
-            "服务端错误 (code={})：{}",
-            api_response.code, api_response.msg
-        )));
-    }
-
-    if api_response.code > 0 {
-        let code = api_response.code;
-        return Err(match code {
-            7001..=7005 => errors::mirror_cdk_error(code, api_response.msg),
-            _ => errors::mirror_resource_error(code, api_response.msg),
-        });
-    }
-
-    let data = api_response
-        .data
-        .ok_or_else(|| errors::mirror_api_error("响应缺少 data 字段"))?;
+    let data = call_mirror_api(&version, os, arch, cdk)?;
 
     let download_url = data.url.ok_or_else(|| {
         errors::app_error(
@@ -826,6 +806,7 @@ fn check_github_api(
         github_asset_url: Some(matched.url),
         can_download_from_mirror: false,
         can_download_from_github: true,
+        sha256_verification_enabled: true,
     })))
 }
 
@@ -913,6 +894,7 @@ fn load_manifest_candidate(
         github_asset_url,
         can_download_from_mirror: has_mirror_url,
         can_download_from_github: has_github_url,
+        sha256_verification_enabled: true,
     })))
 }
 
@@ -1305,6 +1287,7 @@ mod tests {
             github_asset_url: None,
             can_download_from_mirror: true,
             can_download_from_github: false,
+            sha256_verification_enabled: false,
         };
         let github_candidate = UpdateCandidate {
             priority: 1,
@@ -1320,6 +1303,7 @@ mod tests {
             github_asset_url: Some("https://github.com/Achilng/floral-notepaper/releases/download/v1.0.5/floral-notepaper_1.0.5_macos_aarch64_app.zip".into()),
             can_download_from_mirror: false,
             can_download_from_github: true,
+            sha256_verification_enabled: true,
         };
 
         let merged = merge_candidates(vec![mirror_candidate, github_candidate])

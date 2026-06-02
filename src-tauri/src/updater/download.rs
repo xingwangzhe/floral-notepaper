@@ -61,6 +61,10 @@ struct DownloadPlan {
     url: Url,
     final_path: PathBuf,
     part_path: PathBuf,
+    /// Whether SHA-256 hash verification is enabled for this download.
+    /// Set to `false` for Mirror source because the Mirror API does not
+    /// return asset checksums in its response.
+    sha256_verification_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -281,6 +285,7 @@ impl UpdateDownloadService {
             url,
             final_path,
             part_path,
+            sha256_verification_enabled: !matches!(source, DownloadSourceUsed::Mirror),
         })
     }
 
@@ -319,6 +324,7 @@ impl UpdateDownloadService {
                 url,
                 final_path,
                 part_path,
+                sha256_verification_enabled: true,
             });
         }
 
@@ -400,6 +406,7 @@ impl UpdateDownloadService {
             url,
             final_path,
             part_path,
+            sha256_verification_enabled: true,
         })
     }
 
@@ -438,6 +445,9 @@ impl UpdateDownloadService {
             url,
             final_path,
             part_path,
+            // Mirror API does not provide asset SHA-256 checksums;
+            // verification is explicitly disabled for Mirror downloads.
+            sha256_verification_enabled: false,
         })
     }
 
@@ -649,13 +659,26 @@ impl UpdateDownloadService {
         }
 
         let actual_sha256 = format!("{:x}", hasher.finalize());
+        // Mirror API does not provide asset SHA-256 checksums, so verification
+        // is explicitly disabled for Mirror-sourced downloads. When verification
+        // is enabled and no expected hash exists, that is a hard error because
+        // it should never happen for GitHub-sourced releases.
         let computed = if let Some(ref expected) = plan.asset_sha256 {
             if actual_sha256 != *expected {
                 return Err(hash_mismatch_error(expected, &actual_sha256));
             }
             None
+        } else if !plan.sha256_verification_enabled {
+            eprintln!(
+                "[update] SHA-256 verification is disabled for Mirror source \
+                 downloads (Mirror API does not provide asset checksums)"
+            );
+            None
         } else {
-            Some(actual_sha256)
+            return Err(errors::app_error(
+                "updateDownloadMissingSha256",
+                "缺少 SHA-256 校验值，无法验证下载文件完整性",
+            ));
         };
 
         fs::rename(&plan.part_path, &plan.final_path)?;
@@ -889,13 +912,22 @@ fn verify_existing_file(plan: &DownloadPlan) -> Result<Option<Option<String>>, A
     }
 
     let actual = format!("{:x}", hasher.finalize());
+    // Mirror API does not provide asset SHA-256 checksums, so verification
+    // is explicitly disabled for Mirror-sourced downloads. When verification
+    // is enabled and no expected hash exists, that is a hard error because
+    // it should never happen for GitHub-sourced releases.
     if let Some(ref expected) = plan.asset_sha256 {
         if actual != *expected {
             return Ok(None);
         }
         Ok(Some(None))
+    } else if !plan.sha256_verification_enabled {
+        Ok(Some(None))
     } else {
-        Ok(Some(Some(actual)))
+        Err(errors::app_error(
+            "updateDownloadMissingSha256",
+            "缺少 SHA-256 校验值，无法验证下载文件完整性",
+        ))
     }
 }
 
@@ -1114,6 +1146,7 @@ mod tests {
             .expect("test url"),
             final_path: version_dir.join(name),
             part_path: version_dir.join(format!("{name}.part")),
+            sha256_verification_enabled: true,
         }
     }
 
