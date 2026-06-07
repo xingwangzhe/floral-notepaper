@@ -44,6 +44,7 @@ src/assets/fonts/SourceHanSerifSC-Bold.woff2
 
 ## IDE
 .idea/
+.vscode/
 *.swp
 *~
 
